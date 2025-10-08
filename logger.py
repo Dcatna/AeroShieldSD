@@ -4,6 +4,17 @@ import datetime
 import sys
 from mavsdk import System
 
+#
+# Usage -> Starting the Logger    
+#   drone = System()
+#   await drone.connect(system_address=connection_url)
+#   mav_logger = Logger(drone, "sqaure_mission")
+#   await mav_logger.start()
+#
+# Usage -> Stopping Logger
+#   await mav_logger.stop()
+
+
 DEFAULT_ADDR = "udpin://0.0.0.0:14540"
 
 def _open_logfile(mission_name: str):
