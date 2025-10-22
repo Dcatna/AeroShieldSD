@@ -113,7 +113,7 @@ async def run_mission(connection_url):
 
 if __name__ == "__main__":
     addr = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_ADDR
-    if addr.startswith("udp://:"):
+    if addr.startswith("udpin://:"):
         port = addr.split(":")[-1]
         addr = f"udpin://0.0.0.0:{port}"
 
