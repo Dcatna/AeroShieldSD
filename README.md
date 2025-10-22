@@ -13,3 +13,6 @@ This pipeline will include:
 - A **digital twin testbed** (Gazebo or AirSim) to run baseline and adversarial scenarios
 
 The end goal is to deliver a reproducible workflow, documentation, and sample logs that can be used for future mission assurance research.
+
+
+<img width="1464" height="551" alt="Screenshot 2025-10-18 133036" src="https://github.com/user-attachments/assets/0d2a8468-e655-40ff-86b3-799a03995e5e" />
