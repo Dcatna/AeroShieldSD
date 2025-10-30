@@ -1,2 +1,5 @@
 *.txt
 *.csv
+csv_to_mavlink_replay.py
+hil_replay_test.py
+per_topic_mavlink_replay.py
