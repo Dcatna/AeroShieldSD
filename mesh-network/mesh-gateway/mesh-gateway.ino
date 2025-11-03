@@ -46,7 +46,7 @@ void sendSerialThroughMesh() {
       break;
     }
     DynamicJsonDocument doc(64 + rd*2); //we use this size bc when each byte is converted to hex it becomes 2 characters (bytes read*2) then add 64 for the key names and anything else
-    doc["hex"] = toHex(buff, read); //we send this and not the binary bc painlessmesh only supports strings and not raw bytes, so we just encode and decode each message
+    doc["hex"] = toHex(buff, read); //we send this and not the binary bc painlessmesh with esp8266 only supports strings and not raw bytes, so we just encode and decode each message
     doc["source"] = nodeId;
     doc["msgCount"] = msgCount++;
     doc["msgType"] = "m"; //in case we want to clarify the types of messages sent later?
@@ -57,8 +57,17 @@ void sendSerialThroughMesh() {
   }
 }
 
-void recieveMessageFromMesh(uint32_t from, String &msg) {
+void recieveMessageFromMesh(uint32_t from, String &msg) { //recieve message from mesh and write it to the pixhawk
+  DynamicJsonDocument d(2048);
+  DeserializationError e = deserializeJson(d, msg);
+  if(e) return;
 
+  if (strcmp(d["msgType"], "m") == 0) {
+    const String hex = d["hex"].as<String>();
+    static uint8_t buf[512];
+    size_t n = fromHex(hex, buf, sizeof(buf));
+    if(n>0) Serial.write(buf, n); //this is sending the serial to the pixhawk to run the commands
+  } // add more message cases later
 }
 
 void setup() {
