@@ -1,26 +1,28 @@
 #include <painlessMesh.h>
 #include <ArduinoJson.h>
 
+
 #define MESH_PREFIX   "whateverYouLike"
 #define MESH_PASSWORD "somethingSneaky"
 #define MESH_PORT     5555
 
-String nodeName = "node1"; //change to whatever the node is (doesnt matter just make it different from the others)
+String nodeName = "node3"; //change to whatever the node is (doesnt matter just make it different from the others)
+uint32_t myId = 2; //used for gateway, change with each node
 const uint32_t BAUD = 115200;           // match Pixhawk
 const uint16_t MAX_SERIAL_CHUNK = 128; //max bytes we can read at a time
 const uint32_t HBLOSS = 4000; //time without heartbeat before switch 
-bool amIGateway = true; //first node will be gateway
+bool amIGateway = false; //first node will be gateway
+uint32_t lastHB = 0;
+uint32_t msgCount = 0;
+uint32_t leaderId = 0;
 
 painlessMesh mesh;
 Scheduler userScheduler;
 
-uint32_t msgCount = 0;
-uint32_t nodeId = 0; //used for gateway, change with each node
-
-static const char *HEX = "0123456789ABCDEF";
+static const char *HEXCHARS = "0123456789ABCDEF";
 String toHex(const uint8_t* data, size_t len){ //just using this to make it readable for us
   String s; s.reserve(len*2);
-  for(size_t i=0;i<len;i++){ s += HEX[(data[i]>>4)&0xF]; s += HEX[data[i]&0xF]; }
+  for(size_t i=0;i<len;i++){ s += HEXCHARS[(data[i]>>4)&0xF]; s += HEXCHARS[data[i]&0xF]; }
   return s;
 }
 size_t fromHex(const String& hex, uint8_t* out, size_t maxlen){
@@ -42,16 +44,15 @@ void sendSerialThroughMesh() {
   uint8_t buff[256];
   if (Serial.available()) {
     int read = Serial.readBytes(buff, min((int)MAX_SERIAL_CHUNK, Serial.available())); //we chose the min here so either the max we can read or what is available from serial
-    if (read == 0) {
-      break;
-    }
-    DynamicJsonDocument doc(64 + rd*2); //we use this size bc when each byte is converted to hex it becomes 2 characters (bytes read*2) then add 64 for the key names and anything else
+    if (read == 0) return; // <-- 'break' would crash outside of a loop, replaced with return
+
+    DynamicJsonDocument doc(64 + read*2); //we use this size bc when each byte is converted to hex it becomes 2 characters (bytes read*2) then add 64 for the key names and anything else
     doc["hex"] = toHex(buff, read); //we send this and not the binary bc painlessmesh with esp8266 only supports strings and not raw bytes, so we just encode and decode each message
-    doc["source"] = nodeId;
+    doc["source"] = myId;
     doc["msgCount"] = msgCount++;
     doc["msgType"] = "m"; //in case we want to clarify the types of messages sent later?
 
-    string output;
+    String output;
     serializeJson(doc, output);
     mesh.sendBroadcast(output);
   }
@@ -62,17 +63,101 @@ void recieveMessageFromMesh(uint32_t from, String &msg) { //recieve message from
   DeserializationError e = deserializeJson(d, msg);
   if(e) return;
 
-  if (strcmp(d["msgType"], "m") == 0) {
+  const char* type = d["msgType"] | "";   // <-- safe extraction
+
+  if (strcmp(type, "m") == 0) {           // <-- compare the extracted C-string
     const String hex = d["hex"].as<String>();
     static uint8_t buf[512];
     size_t n = fromHex(hex, buf, sizeof(buf));
     if(n>0) Serial.write(buf, n); //this is sending the serial to the pixhawk to run the commands
-  } // add more message cases later
+  }
+  else if (strcmp(type, "ctr") == 0) {
+    const char* cmd = d["cmd"] | "";
+    if (strcmp(cmd, "heartbeat") == 0) {
+      uint32_t id = d["id"] | 0;
+      if (id == leaderId) {
+        lastHB = millis(); // returns the time since the board was booted, so we can check this on the election task and see the time difference ?
+      }
+    } 
+  } // add more cases
 }
+
+void sendHeartBeat() {
+  if (amIGateway) {
+    DynamicJsonDocument doc(64);
+    doc["msgType"] = "ctr";
+    doc["cmd"] = "heartbeat";
+    doc["id"] = myId;
+
+    String msg; serializeJson(doc, msg);
+    mesh.sendBroadcast(msg);
+
+    lastHB = millis();
+  }
+}
+
+
+void electGatewayCheck() {
+  if (amIGateway) return;
+
+  bool newElection = (millis() - lastHB) > HBLOSS;
+  static uint32_t prevLeader = 0;
+  static bool     prevRole   = false;
+
+  if (newElection) {
+    SimpleList<uint32_t> nodeList = mesh.getNodeList();
+    uint32_t minNode = myId;
+    for (auto it = nodeList.begin(); it != nodeList.end(); ++it) {
+      if (*it < minNode) minNode = *it;
+    }
+    leaderId   = minNode;
+    amIGateway = (leaderId == myId);
+
+    if (amIGateway) {
+      DynamicJsonDocument doc(64);
+      doc["msgType"] = "ctr";
+      doc["cmd"]     = "heartbeat";
+      doc["id"]      = myId;
+      String msg; serializeJson(doc, msg);
+      mesh.sendBroadcast(msg);
+      lastHB = millis(); // ← mark our own HB so followers don’t instantly reelect
+    }
+  }
+
+  // print only on change
+  if (leaderId != prevLeader || amIGateway != prevRole) {
+    Serial.printf("[%s] election -> leader=%u (me? %s)\n",
+                  nodeName.c_str(), leaderId, amIGateway ? "yes" : "no");
+    prevLeader = leaderId;
+    prevRole   = amIGateway;
+  }
+}
+
+
+//send heartbeat thru mesh every second
+Task sendHeartBeatThroughMesh(1000, TASK_FOREVER, &sendHeartBeat); 
+Task electionTask(1000, TASK_FOREVER, &electGatewayCheck);
 
 void setup() {
   // put your setup code here, to run once:
+  Serial.begin(BAUD);
+  delay(200);
 
+  mesh.setDebugMsgTypes(ERROR | STARTUP);  // minimal, readable
+  mesh.init(MESH_PREFIX, MESH_PASSWORD, &userScheduler, MESH_PORT);
+  myId = mesh.getNodeId();
+  Serial.printf("[%s] booted, id=%u\n", nodeName.c_str(), myId);
+  lastHB = millis();
+
+  mesh.onReceive(&recieveMessageFromMesh);
+
+  userScheduler.addTask(sendHeartBeatThroughMesh);  sendHeartBeatThroughMesh.enable();
+  userScheduler.addTask(electionTask);               electionTask.enable();
+
+  // pump serial often
+  Task* serialTask = new Task(10, TASK_FOREVER, &sendSerialThroughMesh);
+  userScheduler.addTask(*serialTask);
+  serialTask->enable();
 }
 
 void loop() {
