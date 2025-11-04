@@ -19,9 +19,12 @@ uint32_t leaderId = 0;
 painlessMesh mesh;
 Scheduler userScheduler;
 
-// --- added: brief grace period so a fresh node doesn't instantly re-elect
+// grace period so a fresh node doesn't instantly re-elect
 const uint32_t DISCOVERY_MS = 7000; //give mesh time to discover peers + receive a HB  (↑ a bit)
 uint32_t bootAt = 0;
+
+// --- NEW: use painlessMesh node id for elections/heartbeats
+uint32_t meshId = 0; // our painlessMesh node id (32-bit), used for elections/HB
 
 static const char *HEXCHARS = "0123456789ABCDEF";
 String toHex(const uint8_t* data, size_t len){ //just using this to make it readable for us
@@ -96,19 +99,28 @@ void recieveMessageFromMesh(uint32_t from, String &msg) {
     size_t n = fromHex(hex, buf, sizeof(buf));
     Serial.printf("  MAVLink frame %u bytes\n", (unsigned)n);
     if (n > 0) Serial.write(buf, n);
-    } else if (strcmp(type, "ctr") == 0) {
+  } else if (strcmp(type, "ctr") == 0) {
     const char* cmd = d["cmd"] | "";
-    uint32_t id = d["id"] | 0;
+    uint32_t id = d["id"] | 0;   // id carried in control packet (meshId)
     Serial.printf("  ctl %s from %u\n", cmd, (unsigned)id);
 
-    
+    // --- dynamic leader adoption/demotion via heartbeat
     if (strcmp(cmd, "heartbeat") == 0) {
-      if (!amIGateway) { // followers process leader heartbeats
-        if (leaderId == 0 || id == leaderId || id < leaderId) {
-          leaderId = id;          // no leader yet, or better (lower) leader discovered
-          lastHB = millis();      // returns the time since the board was booted, so we can check this on the election task and see the time difference ?
-          Serial.printf("  learned/updated leader=%u via heartbeat\n", (unsigned)id);
-        }
+      uint32_t hid = id; // sender's meshId
+
+      // adopt/upgrade leader if appropriate
+      if (leaderId == 0 || hid == leaderId || hid < leaderId) {
+        leaderId = hid;
+        lastHB = millis(); // returns the time since the board was booted, so we can check this on the election task and see the time difference ?
+        Serial.printf("  learned/updated leader=%u via heartbeat\n", (unsigned)leaderId);
+      }
+
+      // if we thought we were leader but a lower meshId is present, step down
+      if (amIGateway && hid < meshId) {
+        amIGateway = false;
+        leaderId = hid;
+        lastHB = millis();
+        Serial.println("  stepping down; better leader detected");
       }
     } else if (strcmp(cmd, "whois") == 0) {
       // if someone asks and we are the leader, answer with a heartbeat immediately
@@ -116,9 +128,9 @@ void recieveMessageFromMesh(uint32_t from, String &msg) {
         DynamicJsonDocument doc(64);
         doc["msgType"] = "ctr";
         doc["cmd"] = "heartbeat";
-        doc["id"]  = myId;
-        String msg; serializeJson(doc, msg);
-        mesh.sendBroadcast(msg);
+        doc["id"]  = meshId; // reply with our meshId
+        String out; serializeJson(doc, out);
+        mesh.sendBroadcast(out);
       }
     }
   }
@@ -130,7 +142,7 @@ void sendHeartBeat() {
     DynamicJsonDocument doc(64);
     doc["msgType"] = "ctr";
     doc["cmd"] = "heartbeat";
-    doc["id"] = myId;
+    doc["id"]  = meshId; // ← use meshId, not myId
 
     String msg; serializeJson(doc, msg);
     mesh.sendBroadcast(msg);
@@ -155,32 +167,36 @@ void electGatewayCheck() {
 
     //if we don't see any peers yet, don't self-elect on first timeout
     // Give the mesh another full window and ask "who is leader?"
+    // if we don't see any peers → we are alone → self-elect now
     if (nodeList.size() == 0) {
-      DynamicJsonDocument q(64);
-      q["msgType"] = "ctr";
-      q["cmd"]     = "whois";
-      q["id"]      = myId;
-      String msg; serializeJson(q, msg);
+      leaderId   = meshId;          // ← elect self
+      amIGateway = true;
+
+      DynamicJsonDocument doc(64);
+      doc["msgType"] = "ctr";
+      doc["cmd"]     = "heartbeat";
+      doc["id"]      = meshId;      // broadcast our leadership
+      String msg; serializeJson(doc, msg);
       mesh.sendBroadcast(msg);
 
-      lastHB = millis();  // reset timer and wait again
-      return;             // avoid electing with an empty neighbor list
+      lastHB = millis();            // mark our own HB
+      Serial.println("[election] alone -> self-elect");
+      return;
     }
-
-    uint32_t minNode = myId;
+    uint32_t minNode = meshId; // ← start with our mesh id
     for (auto it = nodeList.begin(); it != nodeList.end(); ++it) {
       if (*it < minNode) minNode = *it;
     }
 
     // deterministic: lowest id is the leader; only self-elect if you are the min
     leaderId   = minNode;
-    amIGateway = (leaderId == myId);
+    amIGateway = (leaderId == meshId); // ← compare in same id space
 
     if (amIGateway) {
       DynamicJsonDocument doc(64);
       doc["msgType"] = "ctr";
       doc["cmd"]     = "heartbeat";
-      doc["id"]      = myId;
+      doc["id"]      = meshId; // ← meshId
       String msg; serializeJson(doc, msg);
       mesh.sendBroadcast(msg);
       lastHB = millis(); // ← mark our own HB so followers don’t instantly reelect
@@ -192,7 +208,7 @@ void electGatewayCheck() {
       DynamicJsonDocument q(64);
       q["msgType"] = "ctr";
       q["cmd"]     = "whois";
-      q["id"]      = myId;
+      q["id"]      = meshId; // ← meshId
       String msg; serializeJson(q, msg);
       mesh.sendBroadcast(msg);
     }
@@ -210,8 +226,8 @@ void electGatewayCheck() {
 
 
 void printStatus() {
-  Serial.printf("[%s] id=%u leader=%u me? %s lastHB=%lu now=%lu\n",
-    nodeName.c_str(), myId, leaderId, amIGateway ? "yes" : "no",
+  Serial.printf("[%s] myMeshId=%u leader=%u me? %s lastHB=%lu now=%lu\n",
+    nodeName.c_str(), meshId, leaderId, amIGateway ? "yes" : "no",
     (unsigned long)lastHB, (unsigned long)millis());
 }
 
@@ -222,18 +238,22 @@ Task sendHeartBeatThroughMesh(1000, TASK_FOREVER, &sendHeartBeat);
 Task electionTask(1000, TASK_FOREVER, &electGatewayCheck);
 
 void onConnChange() {
-  // mesh churn can momentarily pause traffic; bump lastHB so we don't mis-elect
-  lastHB = millis();
-  // optional: if we don't yet know a leader, prefer the smallest neighbor we can see
+  // mesh churn can momentarily pause traffic; only bump if a leader is known
+  if (leaderId != 0) lastHB = millis();
+
+  // optional: a gentle hint if we don't know a leader yet
   if (!amIGateway && leaderId == 0) {
     SimpleList<uint32_t> nodeList = mesh.getNodeList();
-    uint32_t minNode = myId;
-    for (auto it = nodeList.begin(); it != nodeList.end(); ++it) {
-      if (*it < minNode) minNode = *it;
+    if (nodeList.size() > 0) {
+      uint32_t minNode = meshId;
+      for (auto it = nodeList.begin(); it != nodeList.end(); ++it) {
+        if (*it < minNode) minNode = *it;
+      }
+      if (minNode != meshId) leaderId = minNode;  // prefer the smallest neighbor
     }
-    if (minNode != myId) leaderId = minNode;
   }
 }
+
 
 void setup() {
   // put your setup code here, to run once:
@@ -242,7 +262,8 @@ void setup() {
 
   mesh.setDebugMsgTypes(ERROR | STARTUP);  // minimal, readable
   mesh.init(MESH_PREFIX, MESH_PASSWORD, &userScheduler, MESH_PORT);
-  myId = mesh.getNodeId();
+  myId   = mesh.getNodeId(); // keep for your logs/metadata if you like
+  meshId = myId;             // --- NEW: use this id everywhere for elections/HB
   Serial.printf("[%s] booted, id=%u\n", nodeName.c_str(), myId);
   lastHB = millis();
   bootAt = millis(); // --- added: start of grace window
