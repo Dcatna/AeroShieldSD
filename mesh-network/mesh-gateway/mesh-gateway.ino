@@ -1,10 +1,14 @@
 #include <painlessMesh.h>
 #include <ArduinoJson.h>
-
+#include <ESP8266WiFi.h>
+#include <WiFiUdp.h>
 
 #define MESH_PREFIX   "whateverYouLike"
 #define MESH_PASSWORD "somethingSneaky"
 #define MESH_PORT     5555
+#define UDP_SSID      "SingleNoWiFi"
+#define UDP_PASS      "somepassword"
+#define WiFi_PORT     14550
 
 String nodeName = "node3"; //change to whatever the node is (doesnt matter just make it different from the others)
 uint32_t myId = 3; //used for gateway, change with each node
@@ -15,6 +19,11 @@ bool amIGateway = false; //first node will be gateway
 uint32_t lastHB = 0;
 uint32_t msgCount = 0;
 uint32_t leaderId = 0;
+
+// UDP
+WiFiUDP Udp;
+char packet_buffer[255]; 
+char reply[] = "Packet received!";
 
 painlessMesh mesh;
 Scheduler userScheduler;
@@ -229,6 +238,41 @@ void printStatus() {
   Serial.printf("[%s] myMeshId=%u leader=%u me? %s lastHB=%lu now=%lu\n",
     nodeName.c_str(), meshId, leaderId, amIGateway ? "yes" : "no",
     (unsigned long)lastHB, (unsigned long)millis());
+  Serial.printf("SingleNoWiFi IP: %s\n", WiFi.softAPIP().toString().c_str());
+}
+
+void start_server() {
+  Serial.println("Starting server...");
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAP(UDP_SSID, UDP_PASS);
+
+  // WiFi.begin(MESH_PREFIX, MESH_PASSWORD);
+  // while (WiFi.status() != WL_CONNECTED) {
+  //   delay(500);
+  //   Serial.println("...");
+  // }
+  Serial.println("Server started!");
+  
+  Udp.begin(WiFi_PORT);
+  Serial.printf("Now listening at IP %s, UDP port %d\n", WiFi.softAPIP().toString().c_str(), WiFi_PORT);
+}
+
+void handle_client() {
+  // if (Udp) {
+    int packet_size = Udp.parsePacket();
+    if (packet_size) {
+      Serial.printf("Received %d bytes from %s, port %d\n", packet_size, Udp.remoteIP().toString().c_str(), Udp.remotePort());
+      int len = Udp.read(packet_buffer, 255);
+      if (len > 0) {
+        packet_buffer[len] = 0;
+      }
+      Serial.write(packet_buffer);
+
+      Udp.beginPacket(Udp.remoteIP(), Udp.remotePort());
+      Udp.write(reply);
+      Udp.endPacket();
+    }
+  // }
 }
 
 // add this task near your other tasks
@@ -236,6 +280,7 @@ Task statusTask(1000, TASK_FOREVER, &printStatus);
 //send heartbeat thru mesh every second
 Task sendHeartBeatThroughMesh(1000, TASK_FOREVER, &sendHeartBeat); 
 Task electionTask(1000, TASK_FOREVER, &electGatewayCheck);
+Task handle_packet(1000, TASK_FOREVER, &handle_client);
 
 void onConnChange() {
   // mesh churn can momentarily pause traffic; only bump if a leader is known
@@ -255,10 +300,12 @@ void onConnChange() {
 }
 
 
+
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(BAUD);
   delay(200);
+
 
   mesh.setDebugMsgTypes(ERROR | STARTUP);  // minimal, readable
   mesh.init(MESH_PREFIX, MESH_PASSWORD, &userScheduler, MESH_PORT);
@@ -277,15 +324,22 @@ void setup() {
   sendHeartBeatThroughMesh.enable();
   userScheduler.addTask(electionTask);               
   electionTask.enable();
-  
+  userScheduler.addTask(handle_packet);
+  handle_packet.enable();
 
   // pump serial often
   Task* serialTask = new Task(10, TASK_FOREVER, &sendSerialThroughMesh);
   userScheduler.addTask(*serialTask);
   serialTask->enable();
+
+  start_server();
+
+
+
 }
 
 void loop() {
   // put your main code here, to run repeatedly:
   mesh.update();
+  // handle_client();
 }
