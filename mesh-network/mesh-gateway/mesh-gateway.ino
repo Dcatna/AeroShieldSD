@@ -46,6 +46,23 @@ size_t fromHex(const String& hex, uint8_t* out, size_t maxlen) {
   return n;
 }
 
+void sendMeshMetaToPi(const char *event) {
+  DynamicJsonDocument doc(256);
+  doc["type"]     = "mesh_meta";
+  doc["event"]    = event;        // e.g. "became_leader", "lost_leader"
+  doc["nodeName"] = nodeName;
+  doc["meshId"]   = meshId;
+  doc["leaderId"] = leaderId;
+  doc["uptime"]   = millis();
+
+  String out;
+  serializeJson(doc, out);
+
+  // Prefix with @@ so the Pi script can filter these lines easily
+  Serial.print("\n@@");
+  Serial.println(out);
+}
+
 void sendSerialThroughMesh() {
   static uint8_t buff[256];
   int avail = Serial.available();
@@ -121,6 +138,7 @@ void sendHeartBeat() {
   doc["id"]      = meshId;
   String msg; serializeJson(doc, msg);
   mesh.sendBroadcast(msg);
+  sendMeshMetaToPi("heartbeat");
   lastHB = millis();
 }
 
@@ -145,7 +163,6 @@ void electGatewayCheck() {
       doc["id"]      = meshId;
       String msg; serializeJson(doc, msg);
       mesh.sendBroadcast(msg);
-
       lastHB = millis();
       // Serial.println("[election] alone -> self-elect");
       return;
@@ -182,6 +199,12 @@ void electGatewayCheck() {
       nodeName.c_str(), leaderId, amIGateway ? "yes" : "no");
     prevLeader = leaderId;
     prevRole   = amIGateway;
+  }
+  // Also tell the Pi whenever its role changes
+  if (amIGateway && prevRole == false) {
+    sendMeshMetaToPi("became_leader");
+  } else if (!amIGateway && prevRole == true) {
+    sendMeshMetaToPi("lost_leader");
   }
 }
 
