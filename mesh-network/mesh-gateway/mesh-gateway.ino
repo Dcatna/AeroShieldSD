@@ -49,7 +49,7 @@ size_t fromHex(const String& hex, uint8_t* out, size_t maxlen) {
 void sendMeshMetaToPi(const char *event) {
   DynamicJsonDocument doc(256);
   doc["type"]     = "mesh_meta";
-  doc["event"]    = event;        // e.g. "became_leader", "lost_leader"
+  doc["event"]    = event;        // e.g. "became_leader", "lost_leader", "heartbeat"
   doc["nodeName"] = nodeName;
   doc["meshId"]   = meshId;
   doc["leaderId"] = leaderId;
