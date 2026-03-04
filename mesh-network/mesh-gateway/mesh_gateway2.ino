@@ -96,7 +96,7 @@ void sendSerialThroughMesh() {
   doc["hex"]      = toHex(buff, read);
   doc["msgCount"] = msgCount++;
   doc["source"]   = meshId;
-  // doc["sent"] = mesh.getNodeTime(); // latency edit
+  doc["sent"] = mesh.getNodeTime(); // latency edit
 
   String output;
   serializeJson(doc, output);
@@ -182,7 +182,11 @@ void recieveMessageFromMesh(uint32_t from, String &msg) {
     static uint8_t buf[512];
     size_t n = fromHex(hex, buf, sizeof(buf));
     rx_payload_bytes += n;
+    uint32_t sent = d["sent"];
+    uint32_t recv = mesh.getNodeTime();
+    uint32_t lat = recv - sent; // lat for latency
     Serial.printf("  MAVLink frame %u bytes\n", (unsigned)n);
+    Serial.printf("  MAVLink message sent=%lu recv=%lu latency=%lu\n", sent, recv, lat);
     //if (n > 0) Serial.write(buf, n); //this is sending the serial to the pixhawk to run the commands 
   } else if (strcmp(type, "ctr") == 0) {
     const char* cmd = d["cmd"] | "";
