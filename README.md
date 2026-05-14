@@ -29,6 +29,10 @@ The platform also integrates edge AI object detection using YOLOv8 running direc
 
 ---
 
+# Running The System
+
+refer to the [README](./pi_code/README.md) in pi_code/ 
+
 # System Architecture
 
 The system consists of several major components.
