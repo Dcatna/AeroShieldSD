@@ -1,5 +1,5 @@
 # helpers Folder Structure
-This conatins the code for the mesh network functionality
+This conatins the code for testing simulated flights and parsing outputted data
 
 ## Directrory Structure
 ```
