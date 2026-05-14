@@ -166,7 +166,10 @@ Metrics evaluated included:
 - Throughput
 - End-to-end latency
 - Mesh reliability
-- Leader failover recovery time
+  
+<img width="743" height="442" alt="drop_rate_by_experiment (1)" src="https://github.com/user-attachments/assets/63dd83d2-a7d0-4560-a359-e1b66aecf81d" />
+<img width="743" height="442" alt="mean_delay_by_experiment (1)" src="https://github.com/user-attachments/assets/adaea87d-3cb9-4a86-9830-c76d929edb4f" />
+<img width="743" height="442" alt="throughput_by_experiment (1)" src="https://github.com/user-attachments/assets/76a607be-2833-4ceb-ab24-048139424021" />
 
 ---
 
