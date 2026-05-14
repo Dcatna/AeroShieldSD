@@ -22,4 +22,6 @@ pi_code
 2. Install reqs.txt
    - `pip install -r reqs.txt`
 3. Run both esp_sender.py and esp_rec.py
-4. On basestation run bs_rec.py
+   - In esp_rec.py, put the IP and port that the basestation bound bs_rec.py to.
+5. On basestation run bs_rec.py
+   - In bs_rec.py, put the IP and port you wish to bind to.
